@@ -1,0 +1,1932 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hyperscaler Packet Journey &amp; Chaos Simulator</title>
+  <!-- Load Tailwind CSS for responsive layout utilities -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['JetBrains Mono', 'Fira Code', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+          },
+          colors: {
+            noc: {
+              bg: '#0b1120',
+              panel: '#0f172a',
+              card: '#131c31',
+              border: '#1e293b',
+              highlight: '#334155',
+            }
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    /* Base NOC dark theme styling & custom scrollbars (fallback-safe even without external CSS) */
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      background-color: #0b1120;
+      color: #e2e8f0;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      margin: 0;
+      padding: 0;
+      overflow-x: hidden;
+    }
+
+    /* Subtle technical grid background */
+    .noc-grid-bg {
+      background-image:
+        linear-gradient(to right, rgba(30, 41, 59, 0.35) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(30, 41, 59, 0.35) 1px, transparent 1px);
+      background-size: 28px 28px;
+    }
+
+    /* Glowing status & packet effects */
+    .glow-cyan {
+      box-shadow: 0 0 16px rgba(6, 182, 212, 0.25);
+    }
+    .glow-red {
+      box-shadow: 0 0 18px rgba(239, 68, 68, 0.3);
+    }
+    .glow-amber {
+      box-shadow: 0 0 16px rgba(245, 158, 11, 0.28);
+    }
+
+    /* SVG link styling */
+    .link-line {
+      transition: stroke 0.35s ease, stroke-opacity 0.35s ease, stroke-width 0.35s ease;
+    }
+    .link-active {
+      stroke: #0ea5e9;
+      stroke-opacity: 0.75;
+      stroke-width: 2.5;
+    }
+    .link-standby {
+      stroke: #334155;
+      stroke-opacity: 0.55;
+      stroke-width: 1.75;
+      stroke-dasharray: 5 5;
+    }
+    .link-failover {
+      stroke: #f59e0b;
+      stroke-opacity: 0.9;
+      stroke-width: 2.75;
+    }
+    .link-down {
+      stroke: #ef4444;
+      stroke-opacity: 0.45;
+      stroke-width: 2;
+      stroke-dasharray: 4 4;
+    }
+    .link-ddos {
+      stroke: #ef4444;
+      stroke-opacity: 0.85;
+      stroke-width: 2.75;
+    }
+
+    /* Interactive node hover and selection */
+    .svg-node {
+      cursor: pointer;
+      transition: transform 0.15s ease, filter 0.2s ease;
+    }
+    .svg-node:hover {
+      filter: brightness(1.18);
+    }
+    .node-selected-ring {
+      animation: pulseRing 1.8s infinite ease-in-out;
+    }
+    @keyframes pulseRing {
+      0%, 100% { stroke-opacity: 0.95; stroke-width: 2.5; }
+      50% { stroke-opacity: 0.35; stroke-width: 4.5; }
+    }
+
+    /* Custom toggle switch */
+    .chaos-toggle {
+      appearance: none;
+      width: 44px;
+      height: 24px;
+      background: #1e293b;
+      border-radius: 9999px;
+      position: relative;
+      cursor: pointer;
+      border: 1px solid #334155;
+      transition: background-color 0.25s ease, border-color 0.25s ease;
+      flex-shrink: 0;
+    }
+    .chaos-toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #94a3b8;
+      transition: transform 0.25s ease, background-color 0.25s ease;
+    }
+    .chaos-toggle:checked {
+      background: rgba(239, 68, 68, 0.25);
+      border-color: #ef4444;
+    }
+    .chaos-toggle:checked::after {
+      transform: translateX(20px);
+      background: #ef4444;
+      box-shadow: 0 0 8px rgba(239, 68, 68, 0.8);
+    }
+
+    /* Custom thin scrollbar for console logs */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0b1120;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col selection:bg-cyan-500/30 selection:text-cyan-200">
+
+  <!-- ==================== 1. HEADER BAR & TELEMETRY ==================== -->
+  <header class="bg-[#0f172a]/95 border-b border-[#1e293b] sticky top-0 z-30 backdrop-blur-md">
+    <div class="max-w-[1600px] mx-auto px-4 py-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+      <!-- Brand / Title -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center shrink-0 glow-cyan">
+          <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+            <circle cx="5" cy="12" r="2" fill="currentColor" />
+            <circle cx="19" cy="12" r="2" fill="currentColor" />
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <h1 class="text-base sm:text-lg font-bold tracking-tight text-white">
+              Hyperscaler Packet Journey &amp; Chaos Simulator
+            </h1>
+            <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
+              VIP 198.51.100.10/32
+            </span>
+          </div>
+          <p class="text-xs text-slate-400">
+            Interactive 7-Stage Edge-to-Core Data Plane, BGP Anycast, Flowspec Scrubbing &amp; Clos VXLAN Explorer
+          </p>
+        </div>
+      </div>
+
+      <!-- Simulation Control Buttons -->
+      <div class="flex flex-wrap items-center gap-2">
+        <button id="btnFireTraced"
+          class="px-3.5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 active:scale-[0.99] text-white text-xs sm:text-sm font-semibold flex items-center gap-2 transition shadow-lg shadow-cyan-950/50 cursor-pointer">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <span>Fire Traced Packet</span>
+        </button>
+
+        <button id="btnNextStep" disabled
+          class="px-3.5 py-2 rounded-lg bg-amber-500/20 border border-amber-500/50 text-amber-300 text-xs sm:text-sm font-semibold flex items-center gap-1.5 transition opacity-40 cursor-not-allowed">
+          <span>Next Hop</span>
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+
+        <button id="btnContinuous"
+          class="px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 text-xs sm:text-sm font-medium flex items-center gap-2 transition cursor-pointer">
+          <span id="dotContinuous" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>Continuous Traffic: ON</span>
+        </button>
+
+        <button id="btnStepMode"
+          class="px-3 py-2 rounded-lg bg-[#131c31] border border-[#334155] text-slate-300 hover:border-amber-500/50 hover:text-amber-200 text-xs sm:text-sm font-medium flex items-center gap-2 transition cursor-pointer">
+          <span id="dotStepMode" class="w-2 h-2 rounded-full bg-slate-500"></span>
+          <span>Step-by-Step Pause: OFF</span>
+        </button>
+
+        <button id="btnReset"
+          class="px-3 py-2 rounded-lg bg-[#131c31] border border-[#334155] text-slate-300 hover:bg-slate-800 hover:text-white text-xs sm:text-sm font-medium transition cursor-pointer">
+          Reset All
+        </button>
+      </div>
+    </div>
+
+    <!-- Live Telemetry Ribbon -->
+    <div class="bg-[#0b1120]/90 border-t border-[#1e293b]">
+      <div class="max-w-[1600px] mx-auto px-4 py-2 grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+        <div class="flex items-center justify-between bg-[#0f172a] border border-[#1e293b] rounded-lg px-3 py-1.5">
+          <span class="text-slate-400">Edge Ingress Rate</span>
+          <span id="metricThroughput" class="font-mono font-semibold text-cyan-400">1.42 Tbps</span>
+        </div>
+        <div class="flex items-center justify-between bg-[#0f172a] border border-[#1e293b] rounded-lg px-3 py-1.5">
+          <span class="text-slate-400">Active E2E Path</span>
+          <span id="metricPath" class="font-mono font-semibold text-emerald-400 truncate ml-2">PoP-A (ORD) → WAN-PRI → DC1</span>
+        </div>
+        <div class="flex items-center justify-between bg-[#0f172a] border border-[#1e293b] rounded-lg px-3 py-1.5">
+          <span class="text-slate-400">Flowspec Drop / Scrub</span>
+          <span id="metricDrop" class="font-mono font-semibold text-slate-300">0.00% (Idle)</span>
+        </div>
+        <div class="flex items-center justify-between bg-[#0f172a] border border-[#1e293b] rounded-lg px-3 py-1.5">
+          <span class="text-slate-400">End-to-End RTT</span>
+          <span id="metricLatency" class="font-mono font-semibold text-cyan-300">18.4 ms</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ==================== MAIN WORKSPACE ==================== -->
+  <main class="flex-1 max-w-[1600px] w-full mx-auto px-4 py-4 flex flex-col gap-4">
+
+    <!-- Status Banner for Step-by-Step Pause or Active Incidents -->
+    <div id="statusBanner" class="hidden rounded-xl border px-4 py-2.5 flex items-center justify-between gap-3 text-xs sm:text-sm">
+      <div class="flex items-center gap-2.5">
+        <span id="statusBannerBadge" class="px-2 py-0.5 rounded font-mono text-[11px] font-bold uppercase">PAUSED</span>
+        <span id="statusBannerText" class="font-medium">Traced packet paused at Step 1.</span>
+      </div>
+      <button id="bannerNextBtn" class="px-3 py-1 rounded-lg bg-amber-500 text-slate-950 font-bold text-xs hover:bg-amber-400 transition cursor-pointer shrink-0">
+        Advance to Next Step →
+      </button>
+    </div>
+
+    <!-- ==================== 2. INTERACTIVE TOPOLOGY CANVAS ==================== -->
+    <section class="bg-[#0f172a] border border-[#1e293b] rounded-2xl overflow-hidden shadow-2xl">
+      <div class="px-4 py-2.5 border-b border-[#1e293b] flex flex-wrap items-center justify-between gap-2 bg-[#131c31]/60">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-cyan-400"></span>
+          <h2 class="text-xs sm:text-sm font-semibold text-slate-200 uppercase tracking-wider">
+            Live Hyperscaler Topology (Click Any Node or Step Badge to Inspect Headers)
+          </h2>
+        </div>
+        <!-- Legend -->
+        <div class="flex flex-wrap items-center gap-4 text-[11px] font-mono text-slate-400">
+          <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-cyan-400 inline-block"></span>HTTPS Request</span>
+          <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block"></span>HTTP 200 Response</span>
+          <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span>DDoS Flood</span>
+          <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block"></span>Failover / Traced</span>
+        </div>
+      </div>
+
+      <!-- Responsive SVG Container -->
+      <div class="w-full noc-grid-bg relative overflow-x-auto">
+        <svg id="topologySvg" viewBox="0 0 1320 600" class="w-full h-auto min-w-[900px] select-none block">
+          <defs>
+            <!-- Glow Filters -->
+            <filter id="glowCyan" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="3.5" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+            <filter id="glowRed" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="4" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+            <filter id="glowAmber" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="4" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+
+            <!-- Zone Gradients -->
+            <linearGradient id="popGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#1e293b" stop-opacity="0.45" />
+              <stop offset="100%" stop-color="#0f172a" stop-opacity="0.7" />
+            </linearGradient>
+            <linearGradient id="wanGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#1e1b4b" stop-opacity="0.45" />
+              <stop offset="100%" stop-color="#0f172a" stop-opacity="0.75" />
+            </linearGradient>
+            <linearGradient id="dcGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#064e3b" stop-opacity="0.25" />
+              <stop offset="100%" stop-color="#0f172a" stop-opacity="0.75" />
+            </linearGradient>
+          </defs>
+
+          <!-- ==================== BACKGROUND ZONE CONTAINERS ==================== -->
+          <!-- Zone 1: Public Internet -->
+          <rect x="14" y="24" width="222" height="552" rx="14" fill="url(#popGrad)" stroke="#1e293b" stroke-width="1.5" />
+          <text x="125" y="48" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="700" letter-spacing="1.2">PUBLIC INTERNET</text>
+          <text x="125" y="64" text-anchor="middle" fill="#64748b" font-size="10" font-family="monospace">BGP Anycast AS64496</text>
+
+          <!-- Zone 2A: Edge PoP A (Chicago - Primary) -->
+          <g id="zonePopA">
+            <rect id="rectPopA" x="252" y="24" width="416" height="356" rx="14" fill="url(#popGrad)" stroke="#0284c7" stroke-opacity="0.45" stroke-width="1.5" />
+            <text x="268" y="47" fill="#38bdf8" font-size="11" font-weight="700" letter-spacing="1">EDGE PoP A — CHICAGO (ORD)</text>
+            <text id="badgePopAStatus" x="652" y="47" text-anchor="end" fill="#34d399" font-size="10" font-weight="700" font-family="monospace">● PRIMARY ACTIVE</text>
+          </g>
+
+          <!-- Zone 2B: Edge PoP B (New York - Secondary) -->
+          <g id="zonePopB">
+            <rect id="rectPopB" x="252" y="396" width="416" height="180" rx="14" fill="url(#popGrad)" stroke="#334155" stroke-width="1.5" />
+            <text x="268" y="418" fill="#94a3b8" font-size="11" font-weight="700" letter-spacing="1">EDGE PoP B — NEW YORK (JFK)</text>
+            <text id="badgePopBStatus" x="652" y="418" text-anchor="end" fill="#64748b" font-size="10" font-weight="700" font-family="monospace">○ ANYCAST STANDBY</text>
+          </g>
+
+          <!-- Zone 3: Private Optical WAN Backbone -->
+          <rect x="684" y="24" width="166" height="552" rx="14" fill="url(#wanGrad)" stroke="#4f46e5" stroke-opacity="0.4" stroke-width="1.5" />
+          <text x="767" y="47" text-anchor="middle" fill="#a5b4fc" font-size="11" font-weight="700" letter-spacing="1">STEP 4: WAN CORE</text>
+          <text x="767" y="63" text-anchor="middle" fill="#6366f1" font-size="10" font-family="monospace">SRv6 / MPLS Fiber</text>
+
+          <!-- Zone 4: Regional Data Center Campus -->
+          <rect x="866" y="24" width="440" height="552" rx="14" fill="url(#dcGrad)" stroke="#059669" stroke-opacity="0.4" stroke-width="1.5" />
+          <text x="884" y="47" fill="#34d399" font-size="11" font-weight="700" letter-spacing="1">REGIONAL DATA CENTER CAMPUS (US-CENTRAL)</text>
+          <text x="1290" y="47" text-anchor="end" fill="#6ee7b7" font-size="10" font-family="monospace">Folded Clos + VXLAN</text>
+
+          <!-- ==================== NETWORK LINKS LAYER ==================== -->
+          <g id="linksLayer">
+            <!-- Client & Botnet to Internet IXP -->
+            <line id="link-client-ixp" x1="72" y1="185" x2="182" y2="290" class="link-line link-active" />
+            <line id="link-botnet-ixp" x1="72" y1="425" x2="182" y2="290" class="link-line link-standby" />
+
+            <!-- IXP to Edge PoP A & Edge PoP B Border Routers -->
+            <line id="link-ixp-brA" x1="182" y1="290" x2="305" y2="175" class="link-line link-active" />
+            <line id="link-ixp-brB" x1="182" y1="290" x2="305" y2="485" class="link-line link-standby" />
+
+            <!-- Inside PoP A: Step 1 -> Step 2 -> Step 3a (L4LB) -> Step 3b (Envoy 1 & 2) -->
+            <line id="link-brA-scrubA" x1="305" y1="175" x2="405" y2="175" class="link-line link-active" />
+            <line id="link-scrubA-l4A" x1="405" y1="175" x2="505" y2="175" class="link-line link-active" />
+            <line id="link-l4A-env1" x1="505" y1="175" x2="608" y2="112" class="link-line link-active" />
+            <line id="link-l4A-env2" x1="505" y1="175" x2="608" y2="245" class="link-line link-active" />
+
+            <!-- Inside PoP B: BR-B -> Scrub-B -> L4/L7-B -->
+            <line id="link-brB-scrubB" x1="305" y1="485" x2="425" y2="485" class="link-line link-standby" />
+            <line id="link-scrubB-l7B" x1="425" y1="485" x2="575" y2="485" class="link-line link-standby" />
+
+            <!-- Edge L7 Proxies to WAN Core Routers -->
+            <line id="link-env1-wanPri" x1="608" y1="112" x2="767" y2="185" class="link-line link-active" />
+            <line id="link-env2-wanPri" x1="608" y1="245" x2="767" y2="185" class="link-line link-active" />
+            <line id="link-env1-wanBkp" x1="608" y1="112" x2="767" y2="435" class="link-line link-standby" />
+            <line id="link-env2-wanBkp" x1="608" y1="245" x2="767" y2="435" class="link-line link-standby" />
+
+            <!-- PoP B L7 Proxy to WAN Core -->
+            <line id="link-l7B-wanPri" x1="575" y1="485" x2="767" y2="185" class="link-line link-standby" />
+            <line id="link-l7B-wanBkp" x1="575" y1="485" x2="767" y2="435" class="link-line link-standby" />
+
+            <!-- WAN Core Routers to DC Border Leaf (Step 5) -->
+            <line id="link-wanPri-dcgw" x1="767" y1="185" x2="925" y2="300" class="link-line link-active" />
+            <line id="link-wanBkp-dcgw" x1="767" y1="435" x2="925" y2="300" class="link-line link-standby" />
+
+            <!-- DC Border Leaf (Step 5) to Clos Spines (Step 6) -->
+            <line id="link-dcgw-spine1" x1="925" y1="300" x2="1045" y2="175" class="link-line link-active" />
+            <line id="link-dcgw-spine2" x1="925" y1="300" x2="1045" y2="425" class="link-line link-active" />
+
+            <!-- Clos Spines (Step 6) to ToR Leaf VTEP (Step 7) -->
+            <line id="link-spine1-leaf" x1="1045" y1="175" x2="1158" y2="300" class="link-line link-active" />
+            <line id="link-spine2-leaf" x1="1045" y1="425" x2="1158" y2="300" class="link-line link-active" />
+
+            <!-- ToR Leaf VTEP (Step 7) to Backend Compute Pod -->
+            <line id="link-leaf-pod" x1="1158" y1="300" x2="1255" y2="300" class="link-line link-active" />
+          </g>
+
+          <!-- Fiber Cut Marker on WAN Primary (Hidden unless WAN Primary Cut is toggled) -->
+          <g id="wanCutBadge" class="hidden" transform="translate(845, 240)">
+            <rect x="-36" y="-12" width="72" height="24" rx="6" fill="#450a0a" stroke="#ef4444" stroke-width="1.5" />
+            <text x="0" y="4" text-anchor="middle" fill="#fca5a5" font-size="10" font-weight="800" font-family="monospace">✕ FIBER CUT</text>
+          </g>
+
+          <!-- ==================== NODES LAYER ==================== -->
+          <g id="nodesLayer">
+            <!-- Client Laptop -->
+            <g class="svg-node" data-step="1" transform="translate(72, 185)">
+              <rect x="-44" y="-32" width="88" height="64" rx="10" fill="#0f172a" stroke="#38bdf8" stroke-width="1.8" />
+              <text x="0" y="-8" text-anchor="middle" fill="#38bdf8" font-size="18">💻</text>
+              <text x="0" y="10" text-anchor="middle" fill="#f8fafc" font-size="10.5" font-weight="700">Client Laptop</text>
+              <text x="0" y="23" text-anchor="middle" fill="#94a3b8" font-size="8.5" font-family="monospace">HTTPS GET</text>
+            </g>
+
+            <!-- Botnet Attacker -->
+            <g id="nodeBotnet" class="svg-node" data-step="2" transform="translate(72, 425)">
+              <rect id="rectBotnet" x="-44" y="-32" width="88" height="64" rx="10" fill="#0f172a" stroke="#475569" stroke-width="1.5" />
+              <text x="0" y="-8" text-anchor="middle" fill="#f87171" font-size="18">☣️</text>
+              <text x="0" y="10" text-anchor="middle" fill="#cbd5e1" font-size="10.5" font-weight="700">Botnet Flood</text>
+              <text id="txtBotnetSub" x="0" y="23" text-anchor="middle" fill="#64748b" font-size="8.5" font-family="monospace">IDLE</text>
+            </g>
+
+            <!-- Public Internet IXP Cloud -->
+            <g class="svg-node" data-step="1" transform="translate(182, 290)">
+              <circle r="34" fill="#0f172a" stroke="#38bdf8" stroke-width="1.8" />
+              <text x="0" y="-6" text-anchor="middle" fill="#38bdf8" font-size="11" font-weight="800">IXP / ISP</text>
+              <text x="0" y="8" text-anchor="middle" fill="#94a3b8" font-size="8.5" font-family="monospace">Anycast</text>
+              <text x="0" y="19" text-anchor="middle" fill="#38bdf8" font-size="8" font-family="monospace">BGP ECMP</text>
+            </g>
+
+            <!-- STEP 1: Edge PoP A Border Router -->
+            <g id="nodeStep1A" class="svg-node" data-step="1" transform="translate(305, 175)">
+              <rect x="-36" y="-34" width="72" height="68" rx="10" fill="#0f172a" stroke="#0ea5e9" stroke-width="2" />
+              <rect x="-26" y="-44" width="52" height="16" rx="4" fill="#0284c7" />
+              <text x="0" y="-33" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="800">STEP 1</text>
+              <text x="0" y="-6" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700">Border Rtr</text>
+              <text x="0" y="7" text-anchor="middle" fill="#38bdf8" font-size="8.5" font-family="monospace">eBGP Edge</text>
+              <text x="0" y="20" text-anchor="middle" fill="#94a3b8" font-size="8" font-family="monospace">br-ord-01</text>
+            </g>
+
+            <!-- STEP 2: Edge PoP A DDoS Scrubbing & Flowspec -->
+            <g id="nodeStep2A" class="svg-node" data-step="2" transform="translate(405, 175)">
+              <rect id="rectScrubA" x="-36" y="-34" width="72" height="68" rx="10" fill="#0f172a" stroke="#0ea5e9" stroke-width="2" />
+              <rect x="-26" y="-44" width="52" height="16" rx="4" fill="#0284c7" />
+              <text x="0" y="-33" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="800">STEP 2</text>
+              <text x="0" y="-6" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700">Flowspec</text>
+              <text x="0" y="7" text-anchor="middle" fill="#38bdf8" font-size="8.5" font-family="monospace">TCAM ACL</text>
+              <text id="txtScrubAState" x="0" y="20" text-anchor="middle" fill="#34d399" font-size="8" font-family="monospace">CLEAN</text>
+            </g>
+
+            <!-- STEP 3a: Edge PoP A Stateless L4LB -->
+            <g id="nodeStep3L4A" class="svg-node" data-step="3" transform="translate(505, 175)">
+              <rect x="-36" y="-34" width="72" height="68" rx="10" fill="#0f172a" stroke="#0ea5e9" stroke-width="2" />
+              <rect x="-28" y="-44" width="56" height="16" rx="4" fill="#0284c7" />
+              <text x="0" y="-33" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="800">STEP 3a</text>
+              <text x="0" y="-6" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700">L4LB</text>
+              <text x="0" y="7" text-anchor="middle" fill="#38bdf8" font-size="8.5" font-family="monospace">Maglev/XDP</text>
+              <text x="0" y="20" text-anchor="middle" fill="#94a3b8" font-size="8" font-family="monospace">5-Tuple Hash</text>
+            </g>
+
+            <!-- STEP 3b: Edge PoP A L7 Proxy Envoy-1 -->
+            <g id="nodeEnvoy1" class="svg-node" data-step="3" transform="translate(608, 112)">
+              <rect id="rectEnvoy1" x="-42" y="-28" width="84" height="56" rx="9" fill="#0f172a" stroke="#22d3ee" stroke-width="1.8" />
+              <rect x="-28" y="-37" width="56" height="14" rx="4" fill="#0891b2" />
+              <text x="0" y="-27" text-anchor="middle" fill="#ffffff" font-size="8.5" font-weight="800">STEP 3b</text>
+              <text x="0" y="-4" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700">Envoy-1 (L7)</text>
+              <text id="txtEnvoy1State" x="0" y="10" text-anchor="middle" fill="#22d3ee" font-size="8" font-family="monospace">TLS Term</text>
+            </g>
+
+            <!-- STEP 3b: Edge PoP A L7 Proxy Envoy-2 -->
+            <g id="nodeEnvoy2" class="svg-node" data-step="3" transform="translate(608, 245)">
+              <rect id="rectEnvoy2" x="-42" y="-28" width="84" height="56" rx="9" fill="#0f172a" stroke="#22d3ee" stroke-width="1.8" />
+              <rect x="-28" y="-37" width="56" height="14" rx="4" fill="#0891b2" />
+              <text x="0" y="-27" text-anchor="middle" fill="#ffffff" font-size="8.5" font-weight="800">STEP 3b</text>
+              <text x="0" y="-4" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700">Envoy-2 (L7)</text>
+              <text id="txtEnvoy2State" x="0" y="10" text-anchor="middle" fill="#22d3ee" font-size="8" font-family="monospace">TLS Term</text>
+            </g>
+
+            <!-- Edge PoP B Nodes (Secondary Failover PoP) -->
+            <g id="nodeStep1B" class="svg-node" data-step="1" transform="translate(305, 485)">
+              <rect x="-34" y="-26" width="68" height="52" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.6" />
+              <text x="0" y="-5" text-anchor="middle" fill="#e2e8f0" font-size="9.5" font-weight="700">BR-JFK</text>
+              <text x="0" y="8" text-anchor="middle" fill="#94a3b8" font-size="8" font-family="monospace">Step 1 Edge</text>
+            </g>
+
+            <g id="nodeStep2B" class="svg-node" data-step="2" transform="translate(425, 485)">
+              <rect id="rectScrubB" x="-36" y="-26" width="72" height="52" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.6" />
+              <text x="0" y="-5" text-anchor="middle" fill="#e2e8f0" font-size="9.5" font-weight="700">Scrub-JFK</text>
+              <text id="txtScrubBState" x="0" y="8" text-anchor="middle" fill="#94a3b8" font-size="8" font-family="monospace">Step 2 ACL</text>
+            </g>
+
+            <g id="nodeStep3B" class="svg-node" data-step="3" transform="translate(575, 485)">
+              <rect x="-54" y="-26" width="108" height="52" rx="8" fill="#0f172a" stroke="#475569" stroke-width="1.6" />
+              <text x="0" y="-5" text-anchor="middle" fill="#e2e8f0" font-size="9.5" font-weight="700">Maglev + Envoy-JFK</text>
+              <text x="0" y="8" text-anchor="middle" fill="#94a3b8" font-size="8" font-family="monospace">Step 3 L4/L7 PoP-B</text>
+            </g>
+
+            <!-- STEP 4: WAN Core Primary Router -->
+            <g id="nodeWanPri" class="svg-node" data-step="4" transform="translate(767, 185)">
+              <rect id="rectWanPri" x="-48" y="-34" width="96" height="68" rx="10" fill="#0f172a" stroke="#818cf8" stroke-width="2" />
+              <rect x="-26" y="-44" width="52" height="16" rx="4" fill="#4f46e5" />
+              <text x="0" y="-33" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="800">STEP 4</text>
+              <text x="0" y="-6" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700">WAN Optical 1</text>
+              <text x="0" y="7" text-anchor="middle" fill="#a5b4fc" font-size="8.5" font-family="monospace">SRv6 Primary</text>
+              <text x="0" y="20" text-anchor="middle" fill="#34d399" font-size="8" font-family="monospace">fc00:dc1::1</text>
+            </g>
+
+            <!-- STEP 4: WAN Core Backup Router -->
+            <g id="nodeWanBkp" class="svg-node" data-step="4" transform="translate(767, 435)">
+              <rect id="rectWanBkp" x="-48" y="-34" width="96" height="68" rx="10" fill="#0f172a" stroke="#475569" stroke-width="1.6" />
+              <rect x="-26" y="-44" width="52" height="16" rx="4" fill="#334155" />
+              <text x="0" y="-33" text-anchor="middle" fill="#cbd5e1" font-size="9" font-weight="800">STEP 4</text>
+              <text x="0" y="-6" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="700">WAN Optical 2</text>
+              <text x="0" y="7" text-anchor="middle" fill="#94a3b8" font-size="8.5" font-family="monospace">SRv6 Backup</text>
+              <text x="0" y="20" text-anchor="middle" fill="#94a3b8" font-size="8" font-family="monospace">fc00:dc1::2</text>
+            </g>
+
+            <!-- STEP 5: Data Center Border Leaf / Gateway -->
+            <g id="nodeStep5" class="svg-node" data-step="5" transform="translate(925, 300)">
+              <rect x="-42" y="-38" width="84" height="76" rx="10" fill="#0f172a" stroke="#10b981" stroke-width="2" />
+              <rect x="-26" y="-48" width="52" height="16" rx="4" fill="#059669" />
+              <text x="0" y="-37" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="800">STEP 5</text>
+              <text x="0" y="-8" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700">DC Gateway</text>
+              <text x="0" y="5" text-anchor="middle" fill="#34d399" font-size="8.5" font-family="monospace">Border Leaf</text>
+              <text x="0" y="18" text-anchor="middle" fill="#a7f3d0" font-size="8" font-family="monospace">VXLAN Encap</text>
+              <text x="0" y="29" text-anchor="middle" fill="#6ee7b7" font-size="7.5" font-family="monospace">VNI 100</text>
+            </g>
+
+            <!-- STEP 6: Clos Spine 1 -->
+            <g id="nodeSpine1" class="svg-node" data-step="6" transform="translate(1045, 175)">
+              <rect id="rectSpine1" x="-40" y="-34" width="80" height="68" rx="10" fill="#0f172a" stroke="#10b981" stroke-width="2" />
+              <rect x="-26" y="-44" width="52" height="16" rx="4" fill="#059669" />
+              <text x="0" y="-33" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="800">STEP 6</text>
+              <text x="0" y="-6" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700">Clos Spine 1</text>
+              <text x="0" y="7" text-anchor="middle" fill="#34d399" font-size="8.5" font-family="monospace">eBGP ECMP</text>
+              <text id="txtSpine1State" x="0" y="20" text-anchor="middle" fill="#6ee7b7" font-size="8" font-family="monospace">AS 65200</text>
+            </g>
+
+            <!-- STEP 6: Clos Spine 2 -->
+            <g id="nodeSpine2" class="svg-node" data-step="6" transform="translate(1045, 425)">
+              <rect id="rectSpine2" x="-40" y="-34" width="80" height="68" rx="10" fill="#0f172a" stroke="#10b981" stroke-width="2" />
+              <rect x="-26" y="-44" width="52" height="16" rx="4" fill="#059669" />
+              <text x="0" y="-33" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="800">STEP 6</text>
+              <text x="0" y="-6" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700">Clos Spine 2</text>
+              <text x="0" y="7" text-anchor="middle" fill="#34d399" font-size="8.5" font-family="monospace">eBGP ECMP</text>
+              <text x="0" y="20" text-anchor="middle" fill="#6ee7b7" font-size="8" font-family="monospace">AS 65200</text>
+            </g>
+
+            <!-- STEP 7: ToR Leaf Switch (VTEP) -->
+            <g id="nodeStep7Leaf" class="svg-node" data-step="7" transform="translate(1158, 300)">
+              <rect x="-38" y="-36" width="76" height="72" rx="10" fill="#0f172a" stroke="#10b981" stroke-width="2" />
+              <rect x="-26" y="-46" width="52" height="16" rx="4" fill="#059669" />
+              <text x="0" y="-35" text-anchor="middle" fill="#ffffff" font-size="9" font-weight="800">STEP 7</text>
+              <text x="0" y="-6" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700">ToR Leaf 1</text>
+              <text x="0" y="7" text-anchor="middle" fill="#34d399" font-size="8.5" font-family="monospace">VTEP Decap</text>
+              <text x="0" y="20" text-anchor="middle" fill="#6ee7b7" font-size="8" font-family="monospace">AS 65301</text>
+            </g>
+
+            <!-- Backend Compute Pod -->
+            <g id="nodeBackendPod" class="svg-node" data-step="7" transform="translate(1255, 300)">
+              <rect x="-38" y="-36" width="76" height="72" rx="10" fill="#064e3b" fill-opacity="0.45" stroke="#34d399" stroke-width="2" />
+              <text x="0" y="-10" text-anchor="middle" fill="#34d399" font-size="17">⚙️</text>
+              <text x="0" y="8" text-anchor="middle" fill="#ffffff" font-size="10" font-weight="700">App Pod</text>
+              <text x="0" y="21" text-anchor="middle" fill="#a7f3d0" font-size="8" font-family="monospace">10.200.1.10</text>
+            </g>
+
+            <!-- Selection Highlight Ring (Moved dynamically via JS) -->
+            <rect id="selectionRing" x="264" y="136" width="82" height="78" rx="13" fill="none" stroke="#38bdf8" stroke-width="2.5" class="node-selected-ring pointer-events-none" />
+          </g>
+
+          <!-- ==================== ANIMATED PACKETS & EFFECTS LAYER ==================== -->
+          <g id="effectsLayer" class="pointer-events-none"></g>
+          <g id="packetsLayer" class="pointer-events-none"></g>
+        </svg>
+      </div>
+    </section>
+
+    <!-- ==================== 3. CHAOS ENGINEERING & FAILURE SIMULATION PANEL ==================== -->
+    <section class="bg-[#0f172a] border border-[#1e293b] rounded-2xl p-4 shadow-xl">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>
+          <h2 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-200">
+            Chaos Engineering &amp; Automated Failover Controls
+          </h2>
+        </div>
+        <span class="text-xs text-slate-400">
+          Toggle fault injections below to observe real-time BGP convergence, Flowspec mitigation &amp; ECMP rerouting
+        </span>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <!-- Chaos 1: DDoS Simulation -->
+        <label id="cardChaosDdos" class="flex flex-col justify-between p-3 rounded-xl bg-[#131c31] border border-[#1e293b] hover:border-slate-700 transition cursor-pointer select-none">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="text-xs font-bold text-white">Simulate DDoS Flood</div>
+              <div class="text-[11px] text-slate-400 mt-0.5">UDP Port 53 DNS Amp</div>
+            </div>
+            <input type="checkbox" id="toggleDdos" class="chaos-toggle" />
+          </div>
+          <div class="mt-3 pt-2 border-t border-[#1e293b] flex items-center justify-between text-[11px] font-mono">
+            <span id="statusDdosText" class="text-slate-400">Normal Traffic</span>
+            <span id="scrubCounterBadge" class="text-red-400 font-semibold hidden">0 Dropped</span>
+          </div>
+        </label>
+
+        <!-- Chaos 2: Edge PoP A Outage -->
+        <label id="cardChaosPopA" class="flex flex-col justify-between p-3 rounded-xl bg-[#131c31] border border-[#1e293b] hover:border-slate-700 transition cursor-pointer select-none">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="text-xs font-bold text-white">Edge PoP A Outage</div>
+              <div class="text-[11px] text-slate-400 mt-0.5">Chicago Fiber / Power Cut</div>
+            </div>
+            <input type="checkbox" id="togglePopA" class="chaos-toggle" />
+          </div>
+          <div class="mt-3 pt-2 border-t border-[#1e293b] flex items-center justify-between text-[11px] font-mono">
+            <span id="statusPopAText" class="text-emerald-400">ORD Online (Anycast)</span>
+          </div>
+        </label>
+
+        <!-- Chaos 3: L7 Proxy Node Crash -->
+        <label id="cardChaosEnvoy1" class="flex flex-col justify-between p-3 rounded-xl bg-[#131c31] border border-[#1e293b] hover:border-slate-700 transition cursor-pointer select-none">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="text-xs font-bold text-white">L7 Proxy Crash</div>
+              <div class="text-[11px] text-slate-400 mt-0.5">Envoy-1 Worker Panic</div>
+            </div>
+            <input type="checkbox" id="toggleEnvoy1" class="chaos-toggle" />
+          </div>
+          <div class="mt-3 pt-2 border-t border-[#1e293b] flex items-center justify-between text-[11px] font-mono">
+            <span id="statusEnvoy1Text" class="text-emerald-400">Envoy 1 &amp; 2 Healthy</span>
+          </div>
+        </label>
+
+        <!-- Chaos 4: WAN Primary Fiber Cut -->
+        <label id="cardChaosWan" class="flex flex-col justify-between p-3 rounded-xl bg-[#131c31] border border-[#1e293b] hover:border-slate-700 transition cursor-pointer select-none">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="text-xs font-bold text-white">WAN Primary Fiber Cut</div>
+              <div class="text-[11px] text-slate-400 mt-0.5">Backhoe Span Outage</div>
+            </div>
+            <input type="checkbox" id="toggleWan" class="chaos-toggle" />
+          </div>
+          <div class="mt-3 pt-2 border-t border-[#1e293b] flex items-center justify-between text-[11px] font-mono">
+            <span id="statusWanText" class="text-emerald-400">SRv6 Primary Active</span>
+          </div>
+        </label>
+
+        <!-- Chaos 5: Clos Spine 1 Outage -->
+        <label id="cardChaosSpine1" class="flex flex-col justify-between p-3 rounded-xl bg-[#131c31] border border-[#1e293b] hover:border-slate-700 transition cursor-pointer select-none">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="text-xs font-bold text-white">Clos Spine 1 Outage</div>
+              <div class="text-[11px] text-slate-400 mt-0.5">ASIC / BFD Link Down</div>
+            </div>
+            <input type="checkbox" id="toggleSpine1" class="chaos-toggle" />
+          </div>
+          <div class="mt-3 pt-2 border-t border-[#1e293b] flex items-center justify-between text-[11px] font-mono">
+            <span id="statusSpine1Text" class="text-emerald-400">2-Way ECMP Active</span>
+          </div>
+        </label>
+      </div>
+    </section>
+
+    <!-- ==================== 4 & 5. LOWER DECK: 7-STEP INSPECTOR + NOC LOGS ==================== -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+      <!-- Left 7 Cols: 7-Step Interactive Explorer & Live Packet Header Inspector -->
+      <section class="lg:col-span-7 bg-[#0f172a] border border-[#1e293b] rounded-2xl p-4 flex flex-col justify-between shadow-xl">
+        <div>
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <h2 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-200 flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-cyan-400"></span>
+              <span>7-Stage Packet Encapsulation &amp; Header Inspector</span>
+            </h2>
+            <span id="inspectorStepBadge" class="text-xs font-mono px-2.5 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+              Viewing Stage 1 of 7
+            </span>
+          </div>
+
+          <!-- 7 Clickable Step Tabs -->
+          <div id="stepTabs" class="grid grid-cols-7 gap-1.5 mb-4">
+            <button data-step="1" class="step-tab py-2 px-1 rounded-lg text-center border text-xs font-semibold transition cursor-pointer bg-cyan-500/20 border-cyan-400 text-white">
+              <div class="text-[10px] opacity-75">STEP 1</div>
+              <div class="truncate">Border</div>
+            </button>
+            <button data-step="2" class="step-tab py-2 px-1 rounded-lg text-center border text-xs font-semibold transition cursor-pointer bg-[#131c31] border-[#1e293b] text-slate-400 hover:text-white">
+              <div class="text-[10px] opacity-75">STEP 2</div>
+              <div class="truncate">Flowspec</div>
+            </button>
+            <button data-step="3" class="step-tab py-2 px-1 rounded-lg text-center border text-xs font-semibold transition cursor-pointer bg-[#131c31] border-[#1e293b] text-slate-400 hover:text-white">
+              <div class="text-[10px] opacity-75">STEP 3</div>
+              <div class="truncate">L4 / L7</div>
+            </button>
+            <button data-step="4" class="step-tab py-2 px-1 rounded-lg text-center border text-xs font-semibold transition cursor-pointer bg-[#131c31] border-[#1e293b] text-slate-400 hover:text-white">
+              <div class="text-[10px] opacity-75">STEP 4</div>
+              <div class="truncate">WAN SRv6</div>
+            </button>
+            <button data-step="5" class="step-tab py-2 px-1 rounded-lg text-center border text-xs font-semibold transition cursor-pointer bg-[#131c31] border-[#1e293b] text-slate-400 hover:text-white">
+              <div class="text-[10px] opacity-75">STEP 5</div>
+              <div class="truncate">DC GW</div>
+            </button>
+            <button data-step="6" class="step-tab py-2 px-1 rounded-lg text-center border text-xs font-semibold transition cursor-pointer bg-[#131c31] border-[#1e293b] text-slate-400 hover:text-white">
+              <div class="text-[10px] opacity-75">STEP 6</div>
+              <div class="truncate">Spines</div>
+            </button>
+            <button data-step="7" class="step-tab py-2 px-1 rounded-lg text-center border text-xs font-semibold transition cursor-pointer bg-[#131c31] border-[#1e293b] text-slate-400 hover:text-white">
+              <div class="text-[10px] opacity-75">STEP 7</div>
+              <div class="truncate">ToR / Pod</div>
+            </button>
+          </div>
+
+          <!-- Step Title & Architectural Summary -->
+          <div class="bg-[#131c31] border border-[#1e293b] rounded-xl p-3.5 mb-3">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+              <h3 id="stepTitle" class="text-sm sm:text-base font-bold text-white">
+                Step 1: Ingestion at the Internet Edge (BGP Anycast Border)
+              </h3>
+              <span id="stepProtocolTag" class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-cyan-300 border border-slate-700">
+                eBGP Anycast • RFC 4786
+              </span>
+            </div>
+            <p id="stepDescription" class="text-xs sm:text-sm text-slate-300 leading-relaxed">
+              Client ISP routes packet via shortest BGP AS-Path to the topologically nearest Edge PoP advertising Anycast VIP 198.51.100.10/32.
+            </p>
+            <div id="stepFailoverNote" class="mt-2 pt-2 border-t border-[#1e293b] text-xs text-amber-300/90 flex items-start gap-1.5">
+              <span class="font-bold shrink-0">Resilience:</span>
+              <span id="stepFailoverText">If Chicago PoP A fails, BGP route withdrawal shifts global ingress traffic to New York PoP B automatically.</span>
+            </div>
+          </div>
+
+          <!-- Visual Wire Header & Encapsulation Stack -->
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                On-the-Wire Protocol Stack &amp; Header Transformations
+              </span>
+              <span id="headerActionBadge" class="text-[11px] font-mono text-cyan-400">
+                Outer → Inner Encapsulation
+              </span>
+            </div>
+            <div id="headerStackContainer" class="flex flex-col gap-1.5 font-mono text-xs">
+              <!-- Populated dynamically by JS -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right 5 Cols: Live BGP & NOC Control-Plane Console Log -->
+      <section class="lg:col-span-5 bg-[#0f172a] border border-[#1e293b] rounded-2xl p-4 flex flex-col shadow-xl">
+        <div class="flex items-center justify-between gap-2 mb-3">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <h2 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-200">
+              Live BGP &amp; Control-Plane Event Log
+            </h2>
+          </div>
+          <button id="btnClearLog" class="text-[11px] font-mono px-2.5 py-1 rounded bg-[#131c31] hover:bg-slate-800 text-slate-400 hover:text-white border border-[#1e293b] transition cursor-pointer">
+            Clear Log
+          </button>
+        </div>
+
+        <div id="nocLogContainer"
+          class="flex-1 bg-[#080d1a] border border-[#1e293b] rounded-xl p-3 font-mono text-[11px] leading-relaxed overflow-y-auto max-h-[430px] min-h-[280px] space-y-1.5">
+          <!-- Log entries injected dynamically -->
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- ==================== SIMULATION & VISUALIZATION ENGINE ==================== -->
+  <script>
+    (function () {
+      'use strict';
+
+      // -----------------------------------------------------------------------
+      // 1. ARCHITECTURAL DATA FOR THE 7 HYPERSCALER STAGES
+      // -----------------------------------------------------------------------
+      const STEP_DETAILS = {
+        1: {
+          title: 'Step 1: Ingestion at the Internet Edge (BGP Anycast Border)',
+          protocol: 'eBGP Anycast • AS64496 → AS65001',
+          description:
+            'The client’s packet enters the hyperscaler network at a metropolitan Internet Exchange Point (IXP) or Tier-1 peering link. Border routers announce identical /24 or /32 Anycast VIP prefixes across global PoPs, attracting the user to the closest Edge PoP via BGP shortest AS-Path.',
+          resilience:
+            'If Edge PoP A (Chicago) suffers a power/fiber outage, its eBGP sessions drop, withdrawing the Anycast route and converging traffic onto Edge PoP B (New York).',
+          actionLabel: 'Ingress Public Packet (Unmodified)',
+          headers: [
+            { layer: 'L2 Ethernet', value: 'Src MAC: ISP-Peer-GW  →  Dst MAC: Edge-Border-NIC', badge: 'L2', color: 'slate' },
+            { layer: 'L3 IPv4', value: 'Src: 203.0.113.42 (Client)  →  Dst: 198.51.100.10 (Anycast VIP)', badge: 'ANYCAST', color: 'cyan' },
+            { layer: 'L4 TCP', value: 'Src Port: 51824  →  Dst Port: 443 (HTTPS) [Flags: PSH, ACK]', badge: 'L4', color: 'blue' },
+            { layer: 'L7 Payload', value: 'TLS 1.3 Application Data (Encrypted HTTPS GET /api/v1/orders)', badge: 'ENCRYPTED', color: 'emerald' }
+          ]
+        },
+        2: {
+          title: 'Step 2: DDoS Scrubbing & Stateless ACLs (BGP Flowspec)',
+          protocol: 'BGP Flowspec RFC 8955 • Hardware TCAM',
+          description:
+            'Ingress sFlow/IPFIX telemetry checks for volumetric anomalies. When a DDoS flood is detected, an automated mitigation controller injects a BGP Flowspec NLRI rule matching the attack signature (e.g., UDP Port 53) with action traffic-rate 0, dropping malicious packets at line rate in hardware TCAM before they reach load balancers.',
+          resilience:
+            'Stateless TCAM rules filter multi-terabit floods at wire speed without consuming CPU, leaving legitimate TCP 443 user sessions completely untouched.',
+          actionLabel: 'Hardware TCAM Inspection (Pass / Drop)',
+          headers: [
+            { layer: 'L2 Ethernet', value: 'Src MAC: Edge-Border  →  Dst MAC: Scrubber-Cluster', badge: 'L2', color: 'slate' },
+            { layer: 'L3 IPv4', value: 'Src: 203.0.113.42  →  Dst: 198.51.100.10 | uRPF Check: PASS', badge: 'VERIFIED', color: 'cyan' },
+            { layer: 'TCAM Filter', value: 'Flowspec Rule: Match [Proto=UDP, DstPort=53] → DROP | TCP:443 → PERMIT', badge: 'RFC 8955', color: 'amber' },
+            { layer: 'L7 Payload', value: 'TLS 1.3 Application Data (Forwarded cleanly to L4LB)', badge: 'PERMIT', color: 'emerald' }
+          ]
+        },
+        3: {
+          title: 'Step 3: Stateless L4LB (Maglev) → L7 Edge Proxy (Envoy)',
+          protocol: 'Maglev Consistent Hash + TLS Termination',
+          description:
+            'Step 3a: Stateless L4 load balancers (Maglev/Katran) hash the 5-tuple and encapsulate the packet (GUE/GRE) to a consistent L7 proxy. Step 3b: Envoy terminates the client’s TLS 1.3 session locally at the metro edge, injects X-Forwarded-For & OpenTelemetry trace headers, and sends an internal HTTP/2 gRPC request over a pooled backbone connection.',
+          resilience:
+            'If Envoy-1 crashes, Maglev consistent hashing smoothly shifts connections to Envoy-2 without resetting existing flows across healthy nodes.',
+          actionLabel: 'TLS Terminated → Re-Originated Internal HTTP/2',
+          headers: [
+            { layer: '3a: GUE Tunnel', value: '[Outer IP: Maglev → Envoy] [UDP GUE] → Decapsulated at Envoy NIC', badge: 'STRIPPED', color: 'amber' },
+            { layer: '3b: Inner IPv4', value: 'Src: 10.240.12.5 (Edge-Envoy)  →  Dst: 10.200.1.10 (DC App VIP)', badge: 'NEW SESSION', color: 'cyan' },
+            { layer: '3b: L4 TCP', value: 'Multiplexed Persistent Backend Connection Pool (HTTP/2 Stream #17)', badge: 'POOLED', color: 'blue' },
+            { layer: '3b: HTTP/2', value: 'GET /api/v1/orders | X-Forwarded-For: 203.0.113.42 | traceparent: 00-9f8e...', badge: 'INJECTED', color: 'emerald' }
+          ]
+        },
+        4: {
+          title: 'Step 4: Private Optical WAN Backbone (SRv6 Traffic Engineering)',
+          protocol: 'Segment Routing IPv6 (SRv6) / MPLS TE',
+          description:
+            'Because regional compute data centers sit hundreds of miles from metro edge PoPs, the Edge Proxy ships the backend RPC across the private optical fiber backbone. Centralized SDN controllers steer traffic via SRv6 Segment IDs (SIDs) for deterministic latency and zero public internet jitter.',
+          resilience:
+            'If a backhoe cuts the primary optical fiber span, SRv6 Traffic Engineering instantaneously steers packets onto the diverse backup optical path.',
+          actionLabel: 'WAN Segment Routing Header Pushed',
+          headers: [
+            { layer: 'L2 Optical', value: 'DWDM 400G Coherent Framing (Edge-Agg → WAN-Core)', badge: 'OPTICAL', color: 'slate' },
+            { layer: 'SRv6 Header', value: 'IPv6 Segment Routing Header (SRH) | Active SID: fc00:dc1:gateway::1', badge: 'ADDED', color: 'indigo' },
+            { layer: 'Inner IPv4', value: 'Src: 10.240.12.5 (Edge-Envoy)  →  Dst: 10.200.1.10 (DC App Pod)', badge: 'ENCAP', color: 'cyan' },
+            { layer: 'HTTP/2 RPC', value: 'GET /api/v1/orders (X-Forwarded-For: 203.0.113.42)', badge: 'PAYLOAD', color: 'emerald' }
+          ]
+        },
+        5: {
+          title: 'Step 5: Data Center Border Leaf / Gateway (VXLAN Encapsulation)',
+          protocol: 'DC Gateway • SRv6 Pop → VXLAN VNI 100',
+          description:
+            'Arriving at the regional Data Center Campus, the Border Leaf (DC Gateway) pops the WAN SRv6 transport header, looks up the target compute tenant in BGP EVPN, and encapsulates the packet inside a VXLAN tunnel (UDP port 4789, VNI 100) destined for the target Top-of-Rack Leaf VTEP.',
+          resilience:
+            'Border Leaves peer via eBGP multipath across all Spine switches, preventing any single gateway-to-spine link from becoming a bottleneck.',
+          actionLabel: 'SRv6 Stripped • VXLAN Overlay Added',
+          headers: [
+            { layer: 'Outer IPv4', value: 'Src: 10.0.0.10 (DC-GW VTEP)  →  Dst: 10.0.0.21 (Leaf-1 VTEP)', badge: 'UNDERLAY', color: 'cyan' },
+            { layer: 'Outer UDP', value: 'Src Port: 49152 (Entropy Hash)  →  Dst Port: 4789 (VXLAN)', badge: 'ADDED', color: 'indigo' },
+            { layer: 'VXLAN Header', value: 'Flags: 0x08 (I-Flag Valid) | VNI: 100 (Tenant Prod-VPC)', badge: 'VNI 100', color: 'indigo' },
+            { layer: 'Inner Frame', value: '[Inner Eth] [IP: 10.240.12.5 → 10.200.1.10] [HTTP/2 GET /api/v1/orders]', badge: 'OVERLAY', color: 'emerald' }
+          ]
+        },
+        6: {
+          title: 'Step 6: Core Clos Spine Fabric (eBGP RFC 7938 ECMP)',
+          protocol: '3-Stage Folded Clos • eBGP Unnumbered (RFC 5549)',
+          description:
+            'Clos Spine switches (AS 65200) act purely as high-speed stateless IP transit pipes. They compute a 5-tuple hash over the outer UDP/IP header (using the randomized outer UDP source port for flow entropy) and forward the packet via Equal-Cost Multi-Path (ECMP) without inspecting the inner VXLAN payload.',
+          resilience:
+            'If Spine 1 fails, Bidirectional Forwarding Detection (BFD) triggers sub-300ms failover, shifting 100% of ECMP flows onto Spine 2.',
+          actionLabel: 'Forwarded Purely on Outer Underlay IP Header',
+          headers: [
+            { layer: 'L2 Link', value: 'BGP Unnumbered IPv6 Link-Local Next-Hop (RFC 5549 FE80::)', badge: 'RFC 5549', color: 'slate' },
+            { layer: 'Outer IPv4', value: 'Src: 10.0.0.10 (DC-GW)  →  Dst: 10.0.0.21 (Leaf-1) | TTL decremented', badge: 'ROUTED', color: 'cyan' },
+            { layer: 'ECMP Hash', value: 'CRC32(Outer SrcIP, DstIP, UDP 49152, 4789) mod N → Selected Spine', badge: 'ECMP', color: 'amber' },
+            { layer: 'Opaque Payload', value: '[VXLAN VNI 100 + Inner IP/HTTP2] (Untouched by Spine ASIC)', badge: 'OPAQUE', color: 'indigo' }
+          ]
+        },
+        7: {
+          title: 'Step 7: ToR Leaf Switch (VTEP Decap) & Backend Compute Pod',
+          protocol: 'VTEP Decapsulation → Container veth / SR-IOV',
+          description:
+            'The Top-of-Rack Leaf switch (or server SmartNIC acting as VTEP) verifies VNI 100, strips the outer Ethernet, IPv4, UDP 4789, and VXLAN headers, and delivers the native inner IPv4 packet across the veth interface into the Kubernetes Application Pod (10.200.1.10:80), which executes the request and returns HTTP 200 OK.',
+          resilience:
+            'Distributed Anycast Gateways on ToR leaves ensure seamless east-west and north-south reachability across thousands of server racks.',
+          actionLabel: 'Outer VXLAN Stripped • Native Packet Delivered to App',
+          headers: [
+            { layer: 'Outer VXLAN', value: '[Outer IP + UDP 4789 + VXLAN VNI 100] → Terminated at Leaf-1 VTEP', badge: 'STRIPPED', color: 'amber' },
+            { layer: 'Inner Eth', value: 'Src MAC: Leaf-1-Anycast-GW  →  Dst MAC: Pod-eth0 (veth)', badge: 'L2', color: 'slate' },
+            { layer: 'Inner IPv4', value: 'Src: 10.240.12.5 (Edge-Envoy)  →  Dst: 10.200.1.10 (App-Pod-01)', badge: 'DELIVERED', color: 'cyan' },
+            { layer: 'HTTP/2 App', value: 'GET /api/v1/orders (X-Forwarded-For: 203.0.113.42) → HTTP 200 OK', badge: '200 OK', color: 'emerald' }
+          ]
+        }
+      };
+
+      // -----------------------------------------------------------------------
+      // 2. EXACT SVG NODE COORDINATES FOR PACKET WAYPOINT ROUTING
+      // -----------------------------------------------------------------------
+      const COORDS = {
+        client:   { x: 72,   y: 185 },
+        botnet:   { x: 72,   y: 425 },
+        ixp:      { x: 182,  y: 290 },
+        // PoP A
+        brA:      { x: 305,  y: 175 },
+        scrubA:   { x: 405,  y: 175 },
+        l4A:      { x: 505,  y: 175 },
+        env1:     { x: 608,  y: 112 },
+        env2:     { x: 608,  y: 245 },
+        // PoP B
+        brB:      { x: 305,  y: 485 },
+        scrubB:   { x: 425,  y: 485 },
+        l7B:      { x: 575,  y: 485 },
+        // WAN Core
+        wanPri:   { x: 767,  y: 185 },
+        wanBkp:   { x: 767,  y: 435 },
+        // Data Center
+        dcgw:     { x: 925,  y: 300 },
+        spine1:   { x: 1045, y: 175 },
+        spine2:   { x: 1045, y: 425 },
+        leaf:     { x: 1158, y: 300 },
+        pod:      { x: 1255, y: 300 }
+      };
+
+      // Selection ring positions per step
+      const RING_BOXES = {
+        1: { x: 263, y: 135, w: 84, h: 80 },
+        2: { x: 363, y: 135, w: 84, h: 80 },
+        3: { x: 463, y: 70,  w: 194, h: 210 },
+        4: { x: 713, y: 145, w: 108, h: 80 },
+        5: { x: 877, y: 256, w: 96, h: 88 },
+        6: { x: 999, y: 135, w: 92, h: 330 },
+        7: { x: 1114, y: 256, w: 185, h: 88 }
+      };
+
+      // -----------------------------------------------------------------------
+      // 3. GLOBAL SIMULATION STATE
+      // -----------------------------------------------------------------------
+      const state = {
+        continuousTraffic: true,
+        stepPauseMode: false,
+        pausedPacket: null,
+        selectedStep: 1,
+
+        // Chaos Fault Flags
+        ddosActive: false,
+        ddosStartTime: 0,
+        flowspecMitigated: false,
+        droppedPacketsCount: 0,
+
+        popAOutage: false,
+        envoy1Crash: false,
+        wanPrimaryCut: false,
+        spine1Outage: false,
+
+        // ECMP & Hash round-robin counters
+        l7HashCounter: 0,
+        ecmpCounter: 0,
+
+        // Active animated packets & visual effects
+        packets: [],
+        effects: [],
+        lastSpawnTime: 0,
+        lastDdosSpawnTime: 0,
+        lastFrameTime: performance.now()
+      };
+
+      // -----------------------------------------------------------------------
+      // 4. DOM ELEMENT REFERENCES
+      // -----------------------------------------------------------------------
+      const packetsLayer = document.getElementById('packetsLayer');
+      const effectsLayer = document.getElementById('effectsLayer');
+      const nocLogContainer = document.getElementById('nocLogContainer');
+      const selectionRing = document.getElementById('selectionRing');
+
+      const btnFireTraced = document.getElementById('btnFireTraced');
+      const btnNextStep = document.getElementById('btnNextStep');
+      const btnContinuous = document.getElementById('btnContinuous');
+      const btnStepMode = document.getElementById('btnStepMode');
+      const btnReset = document.getElementById('btnReset');
+      const btnClearLog = document.getElementById('btnClearLog');
+
+      const statusBanner = document.getElementById('statusBanner');
+      const statusBannerBadge = document.getElementById('statusBannerBadge');
+      const statusBannerText = document.getElementById('statusBannerText');
+      const bannerNextBtn = document.getElementById('bannerNextBtn');
+
+      const toggleDdos = document.getElementById('toggleDdos');
+      const togglePopA = document.getElementById('togglePopA');
+      const toggleEnvoy1 = document.getElementById('toggleEnvoy1');
+      const toggleWan = document.getElementById('toggleWan');
+      const toggleSpine1 = document.getElementById('toggleSpine1');
+
+      // -----------------------------------------------------------------------
+      // 5. NOC LOGGING UTILITY
+      // -----------------------------------------------------------------------
+      function addLog(tag, message, level = 'info') {
+        const now = new Date();
+        const ts = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
+
+        const tagColors = {
+          BGP: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30',
+          FLOWSPEC: 'text-amber-300 bg-amber-500/15 border-amber-500/40',
+          MAGLEV: 'text-sky-300 bg-sky-500/10 border-sky-500/30',
+          ENVOY: 'text-teal-300 bg-teal-500/10 border-teal-500/30',
+          'SRv6-TE': 'text-indigo-300 bg-indigo-500/15 border-indigo-500/40',
+          BFD: 'text-red-400 bg-red-500/15 border-red-500/40',
+          VXLAN: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30',
+          TRACE: 'text-amber-200 bg-amber-500/20 border-amber-400/50',
+          ALERT: 'text-red-300 bg-red-500/20 border-red-500/50'
+        };
+
+        const msgColors = {
+          info: 'text-slate-300',
+          warn: 'text-amber-300',
+          danger: 'text-red-400 font-semibold',
+          success: 'text-emerald-400'
+        };
+
+        const row = document.createElement('div');
+        row.className = 'flex items-start gap-2 border-b border-slate-800/60 pb-1.5';
+        row.innerHTML = `
+          <span class="text-slate-500 shrink-0">${ts}</span>
+          <span class="px-1.5 py-0.2 rounded border text-[10px] font-bold shrink-0 ${tagColors[tag] || tagColors.BGP}">${tag}</span>
+          <span class="${msgColors[level] || msgColors.info}">${message}</span>
+        `;
+
+        nocLogContainer.appendChild(row);
+        // Keep max 80 log lines
+        while (nocLogContainer.children.length > 80) {
+          nocLogContainer.removeChild(nocLogContainer.firstChild);
+        }
+        nocLogContainer.scrollTop = nocLogContainer.scrollHeight;
+      }
+
+      // -----------------------------------------------------------------------
+      // 6. STEP INSPECTOR & UI SYNCHRONIZATION
+      // -----------------------------------------------------------------------
+      function selectStep(stepNum) {
+        state.selectedStep = Number(stepNum);
+        const detail = STEP_DETAILS[state.selectedStep];
+        if (!detail) return;
+
+        // Update Tab styles
+        document.querySelectorAll('.step-tab').forEach((btn) => {
+          const s = Number(btn.dataset.step);
+          if (s === state.selectedStep) {
+            btn.className =
+              'step-tab py-2 px-1 rounded-lg text-center border text-xs font-semibold transition cursor-pointer bg-cyan-500/20 border-cyan-400 text-white shadow-sm shadow-cyan-500/20';
+          } else {
+            btn.className =
+              'step-tab py-2 px-1 rounded-lg text-center border text-xs font-semibold transition cursor-pointer bg-[#131c31] border-[#1e293b] text-slate-400 hover:text-white hover:border-slate-600';
+          }
+        });
+
+        // Move SVG Selection Ring
+        const box = RING_BOXES[state.selectedStep];
+        if (box) {
+          selectionRing.setAttribute('x', box.x);
+          selectionRing.setAttribute('y', box.y);
+          selectionRing.setAttribute('width', box.w);
+          selectionRing.setAttribute('height', box.h);
+        }
+
+        // Update Text Content
+        document.getElementById('inspectorStepBadge').textContent = `Viewing Stage ${state.selectedStep} of 7`;
+        document.getElementById('stepTitle').textContent = detail.title;
+        document.getElementById('stepProtocolTag').textContent = detail.protocol;
+        document.getElementById('stepDescription').textContent = detail.description;
+        document.getElementById('stepFailoverText').textContent = detail.resilience;
+        document.getElementById('headerActionBadge').textContent = detail.actionLabel;
+
+        // Render Encapsulation Header Stack
+        const badgeStyles = {
+          slate: 'bg-slate-800 text-slate-300 border-slate-600',
+          cyan: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40',
+          blue: 'bg-blue-500/15 text-blue-300 border-blue-500/40',
+          emerald: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+          amber: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+          indigo: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/45'
+        };
+
+        const rowBorders = {
+          slate: 'border-slate-700/80 bg-[#0b1120]',
+          cyan: 'border-cyan-500/40 bg-cyan-950/20',
+          blue: 'border-blue-500/40 bg-blue-950/20',
+          emerald: 'border-emerald-500/40 bg-emerald-950/20',
+          amber: 'border-amber-500/45 bg-amber-950/20',
+          indigo: 'border-indigo-500/45 bg-indigo-950/25'
+        };
+
+        const container = document.getElementById('headerStackContainer');
+        container.innerHTML = detail.headers
+          .map(
+            (h, idx) => `
+          <div style="margin-left: ${idx * 10}px" class="rounded-lg border px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 ${rowBorders[h.color] || rowBorders.slate}">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${badgeStyles[h.color] || badgeStyles.slate}">${h.badge}</span>
+              <span class="font-bold text-slate-200 shrink-0">${h.layer}:</span>
+              <span class="text-slate-300 truncate">${h.value}</span>
+            </div>
+          </div>
+        `
+          )
+          .join('');
+      }
+
+      // -----------------------------------------------------------------------
+      // 7. TOPOLOGY VISUAL & TELEMETRY STATE UPDATER
+      // -----------------------------------------------------------------------
+      function setLinkClass(id, cls) {
+        const el = document.getElementById(id);
+        if (el) el.setAttribute('class', `link-line ${cls}`);
+      }
+
+      function updateTopologyVisuals() {
+        const usePopB = state.popAOutage;
+        const useWanBkp = state.wanPrimaryCut;
+        const useSpine2Only = state.spine1Outage;
+
+        // 1. Edge PoP A vs PoP B visuals
+        const rectPopA = document.getElementById('rectPopA');
+        const badgePopA = document.getElementById('badgePopAStatus');
+        const rectPopB = document.getElementById('rectPopB');
+        const badgePopB = document.getElementById('badgePopBStatus');
+
+        if (state.popAOutage) {
+          rectPopA.setAttribute('stroke', '#ef4444');
+          rectPopA.setAttribute('stroke-opacity', '0.75');
+          badgePopA.textContent = '✕ OFFLINE (BGP WITHDRAWN)';
+          badgePopA.setAttribute('fill', '#f87171');
+
+          rectPopB.setAttribute('stroke', '#f59e0b');
+          rectPopB.setAttribute('stroke-opacity', '0.85');
+          badgePopB.textContent = '● FAILOVER ACTIVE (ANYCAST)';
+          badgePopB.setAttribute('fill', '#fbbf24');
+
+          setLinkClass('link-ixp-brA', 'link-down');
+          setLinkClass('link-ixp-brB', 'link-failover');
+          setLinkClass('link-brA-scrubA', 'link-down');
+          setLinkClass('link-scrubA-l4A', 'link-down');
+          setLinkClass('link-l4A-env1', 'link-down');
+          setLinkClass('link-l4A-env2', 'link-down');
+          setLinkClass('link-brB-scrubB', 'link-failover');
+          setLinkClass('link-scrubB-l7B', 'link-failover');
+        } else {
+          rectPopA.setAttribute('stroke', '#0284c7');
+          rectPopA.setAttribute('stroke-opacity', '0.45');
+          badgePopA.textContent = '● PRIMARY ACTIVE';
+          badgePopA.setAttribute('fill', '#34d399');
+
+          rectPopB.setAttribute('stroke', '#334155');
+          rectPopB.setAttribute('stroke-opacity', '0.7');
+          badgePopB.textContent = '○ ANYCAST STANDBY';
+          badgePopB.setAttribute('fill', '#64748b');
+
+          setLinkClass('link-ixp-brA', 'link-active');
+          setLinkClass('link-ixp-brB', 'link-standby');
+          setLinkClass('link-brA-scrubA', 'link-active');
+          setLinkClass('link-scrubA-l4A', 'link-active');
+        }
+
+        // 2. Envoy-1 vs Envoy-2 inside PoP A
+        const rectEnvoy1 = document.getElementById('rectEnvoy1');
+        const txtEnvoy1 = document.getElementById('txtEnvoy1State');
+        if (!state.popAOutage) {
+          if (state.envoy1Crash) {
+            rectEnvoy1.setAttribute('stroke', '#ef4444');
+            txtEnvoy1.textContent = 'CRASHED (503)';
+            txtEnvoy1.setAttribute('fill', '#f87171');
+            setLinkClass('link-l4A-env1', 'link-down');
+            setLinkClass('link-l4A-env2', 'link-failover');
+          } else {
+            rectEnvoy1.setAttribute('stroke', '#22d3ee');
+            txtEnvoy1.textContent = 'TLS Term';
+            txtEnvoy1.setAttribute('fill', '#22d3ee');
+            setLinkClass('link-l4A-env1', 'link-active');
+            setLinkClass('link-l4A-env2', 'link-active');
+          }
+        }
+
+        // 3. WAN Primary vs Backup Links
+        const rectWanPri = document.getElementById('rectWanPri');
+        const rectWanBkp = document.getElementById('rectWanBkp');
+        const wanCutBadge = document.getElementById('wanCutBadge');
+
+        // Reset all WAN edge-to-core links first
+        ['link-env1-wanPri', 'link-env2-wanPri', 'link-env1-wanBkp', 'link-env2-wanBkp', 'link-l7B-wanPri', 'link-l7B-wanBkp'].forEach(
+          (id) => setLinkClass(id, 'link-standby')
+        );
+
+        if (state.wanPrimaryCut) {
+          rectWanPri.setAttribute('stroke', '#ef4444');
+          rectWanBkp.setAttribute('stroke', '#f59e0b');
+          wanCutBadge.classList.remove('hidden');
+          setLinkClass('link-wanPri-dcgw', 'link-down');
+          setLinkClass('link-wanBkp-dcgw', 'link-failover');
+
+          if (usePopB) {
+            setLinkClass('link-l7B-wanBkp', 'link-failover');
+          } else {
+            if (!state.envoy1Crash) setLinkClass('link-env1-wanBkp', 'link-failover');
+            setLinkClass('link-env2-wanBkp', 'link-failover');
+          }
+        } else {
+          rectWanPri.setAttribute('stroke', '#818cf8');
+          rectWanBkp.setAttribute('stroke', '#475569');
+          wanCutBadge.classList.add('hidden');
+          setLinkClass('link-wanPri-dcgw', 'link-active');
+          setLinkClass('link-wanBkp-dcgw', 'link-standby');
+
+          if (usePopB) {
+            setLinkClass('link-l7B-wanPri', 'link-failover');
+          } else {
+            if (!state.envoy1Crash) setLinkClass('link-env1-wanPri', 'link-active');
+            setLinkClass('link-env2-wanPri', 'link-active');
+          }
+        }
+
+        // 4. Clos Spine 1 vs Spine 2
+        const rectSpine1 = document.getElementById('rectSpine1');
+        const txtSpine1 = document.getElementById('txtSpine1State');
+        if (state.spine1Outage) {
+          rectSpine1.setAttribute('stroke', '#ef4444');
+          txtSpine1.textContent = 'BFD DOWN';
+          txtSpine1.setAttribute('fill', '#f87171');
+          setLinkClass('link-dcgw-spine1', 'link-down');
+          setLinkClass('link-spine1-leaf', 'link-down');
+          setLinkClass('link-dcgw-spine2', 'link-failover');
+          setLinkClass('link-spine2-leaf', 'link-failover');
+        } else {
+          rectSpine1.setAttribute('stroke', '#10b981');
+          txtSpine1.textContent = 'AS 65200';
+          txtSpine1.setAttribute('fill', '#6ee7b7');
+          setLinkClass('link-dcgw-spine1', 'link-active');
+          setLinkClass('link-spine1-leaf', 'link-active');
+          setLinkClass('link-dcgw-spine2', 'link-active');
+          setLinkClass('link-spine2-leaf', 'link-active');
+        }
+
+        // 5. DDoS & Flowspec Scrubber State
+        const rectBotnet = document.getElementById('rectBotnet');
+        const txtBotnetSub = document.getElementById('txtBotnetSub');
+        const rectScrubA = document.getElementById('rectScrubA');
+        const txtScrubA = document.getElementById('txtScrubAState');
+        const rectScrubB = document.getElementById('rectScrubB');
+        const txtScrubB = document.getElementById('txtScrubBState');
+
+        if (state.ddosActive) {
+          rectBotnet.setAttribute('stroke', '#ef4444');
+          txtBotnetSub.textContent = '3.4 Tbps FLOOD';
+          txtBotnetSub.setAttribute('fill', '#f87171');
+          setLinkClass('link-botnet-ixp', 'link-ddos');
+
+          if (state.flowspecMitigated) {
+            rectScrubA.setAttribute('stroke', '#f59e0b');
+            txtScrubA.textContent = 'TCAM DROP';
+            txtScrubA.setAttribute('fill', '#fbbf24');
+            rectScrubB.setAttribute('stroke', '#f59e0b');
+            txtScrubB.textContent = 'TCAM DROP';
+            txtScrubB.setAttribute('fill', '#fbbf24');
+          } else {
+            rectScrubA.setAttribute('stroke', '#ef4444');
+            txtScrubA.textContent = 'DETECTING...';
+            txtScrubA.setAttribute('fill', '#f87171');
+            rectScrubB.setAttribute('stroke', '#ef4444');
+            txtScrubB.textContent = 'DETECTING...';
+            txtScrubB.setAttribute('fill', '#f87171');
+          }
+        } else {
+          rectBotnet.setAttribute('stroke', '#475569');
+          txtBotnetSub.textContent = 'IDLE';
+          txtBotnetSub.setAttribute('fill', '#64748b');
+          setLinkClass('link-botnet-ixp', 'link-standby');
+          rectScrubA.setAttribute('stroke', '#0ea5e9');
+          txtScrubA.textContent = 'CLEAN';
+          txtScrubA.setAttribute('fill', '#34d399');
+          rectScrubB.setAttribute('stroke', '#475569');
+          txtScrubB.textContent = 'Step 2 ACL';
+          txtScrubB.setAttribute('fill', '#94a3b8');
+        }
+
+        // 6. Update Top KPI Telemetry Strip & Chaos Card Subtitles
+        const popLabel = usePopB ? 'PoP-B (JFK)' : 'PoP-A (ORD)';
+        const wanLabel = useWanBkp ? 'WAN-BKP' : 'WAN-PRI';
+        const spineLabel = useSpine2Only ? 'DC1(Sp2)' : 'DC1(ECMP)';
+        const metricPath = document.getElementById('metricPath');
+        metricPath.textContent = `${popLabel} → ${wanLabel} → ${spineLabel}`;
+        metricPath.className =
+          usePopB || useWanBkp || useSpine2Only
+            ? 'font-mono font-semibold text-amber-400 truncate ml-2'
+            : 'font-mono font-semibold text-emerald-400 truncate ml-2';
+
+        // Latency calculation
+        let rtt = 18.4;
+        if (usePopB) rtt += 5.2;
+        if (useWanBkp) rtt += 3.8;
+        if (state.ddosActive && !state.flowspecMitigated) rtt += 14.5;
+        document.getElementById('metricLatency').textContent = `${rtt.toFixed(1)} ms`;
+
+        // Throughput & Drop Rate
+        const metricThroughput = document.getElementById('metricThroughput');
+        const metricDrop = document.getElementById('metricDrop');
+        const scrubBadge = document.getElementById('scrubCounterBadge');
+
+        if (state.ddosActive) {
+          scrubBadge.classList.remove('hidden');
+          scrubBadge.textContent = `${state.droppedPacketsCount.toLocaleString()} Dropped`;
+          if (state.flowspecMitigated) {
+            metricThroughput.textContent = '1.43 Tbps (Clean)';
+            metricThroughput.className = 'font-mono font-semibold text-emerald-400';
+            metricDrop.textContent = '99.98% Attack Dropped';
+            metricDrop.className = 'font-mono font-semibold text-amber-400';
+            document.getElementById('statusDdosText').textContent = 'Flowspec TCAM Active';
+            document.getElementById('statusDdosText').className = 'text-amber-400 font-bold';
+          } else {
+            metricThroughput.textContent = '4.85 Tbps (SURGE)';
+            metricThroughput.className = 'font-mono font-semibold text-red-400';
+            metricDrop.textContent = '0.00% (Analyzing sFlow)';
+            metricDrop.className = 'font-mono font-semibold text-red-400';
+            document.getElementById('statusDdosText').textContent = 'Attack Detected!';
+            document.getElementById('statusDdosText').className = 'text-red-400 font-bold';
+          }
+        } else {
+          scrubBadge.classList.add('hidden');
+          metricThroughput.textContent = '1.42 Tbps';
+          metricThroughput.className = 'font-mono font-semibold text-cyan-400';
+          metricDrop.textContent = '0.00% (Idle)';
+          metricDrop.className = 'font-mono font-semibold text-slate-300';
+          document.getElementById('statusDdosText').textContent = 'Normal Traffic';
+          document.getElementById('statusDdosText').className = 'text-slate-400';
+        }
+
+        // Chaos card status labels
+        document.getElementById('statusPopAText').textContent = state.popAOutage
+          ? 'FAILED → Traffic on PoP B'
+          : 'ORD Online (Anycast)';
+        document.getElementById('statusPopAText').className = state.popAOutage ? 'text-red-400 font-bold' : 'text-emerald-400';
+
+        document.getElementById('statusEnvoy1Text').textContent = state.envoy1Crash
+          ? 'Envoy-1 Down → 100% Envoy-2'
+          : 'Envoy 1 & 2 Healthy';
+        document.getElementById('statusEnvoy1Text').className = state.envoy1Crash ? 'text-amber-400 font-bold' : 'text-emerald-400';
+
+        document.getElementById('statusWanText').textContent = state.wanPrimaryCut
+          ? 'Cut → SRv6 Backup Path'
+          : 'SRv6 Primary Active';
+        document.getElementById('statusWanText').className = state.wanPrimaryCut ? 'text-amber-400 font-bold' : 'text-emerald-400';
+
+        document.getElementById('statusSpine1Text').textContent = state.spine1Outage
+          ? 'Spine-1 Down → 100% Spine-2'
+          : '2-Way ECMP Active';
+        document.getElementById('statusSpine1Text').className = state.spine1Outage ? 'text-amber-400 font-bold' : 'text-emerald-400';
+      }
+
+      // -----------------------------------------------------------------------
+      // 8. PACKET PATH BUILDER & SPAWNER
+      // -----------------------------------------------------------------------
+      function buildLegitimateWaypoints(isTraced = false) {
+        const waypoints = [
+          { ...COORDS.client, step: 1, name: 'Client Laptop' },
+          { ...COORDS.ixp, step: 1, name: 'Public Internet IXP' }
+        ];
+
+        // Edge PoP Selection (PoP A vs PoP B failover)
+        if (state.popAOutage) {
+          waypoints.push({ ...COORDS.brB, step: 1, name: 'PoP-B Border Router (Step 1)' });
+          waypoints.push({ ...COORDS.scrubB, step: 2, name: 'PoP-B Flowspec Scrubber (Step 2)' });
+          waypoints.push({ ...COORDS.l7B, step: 3, name: 'PoP-B Maglev + Envoy (Step 3)' });
+        } else {
+          waypoints.push({ ...COORDS.brA, step: 1, name: 'PoP-A Border Router (Step 1)' });
+          waypoints.push({ ...COORDS.scrubA, step: 2, name: 'PoP-A Flowspec Scrubber (Step 2)' });
+          waypoints.push({ ...COORDS.l4A, step: 3, name: 'Maglev L4LB (Step 3a)' });
+
+          // Consistent hash between Envoy-1 and Envoy-2
+          state.l7HashCounter = (state.l7HashCounter + 1) % 2;
+          if (state.envoy1Crash || state.l7HashCounter === 1) {
+            waypoints.push({ ...COORDS.env2, step: 3, name: 'Envoy-2 L7 Proxy (Step 3b)' });
+          } else {
+            waypoints.push({ ...COORDS.env1, step: 3, name: 'Envoy-1 L7 Proxy (Step 3b)' });
+          }
+        }
+
+        // Step 4: WAN Optical Backbone
+        if (state.wanPrimaryCut) {
+          waypoints.push({ ...COORDS.wanBkp, step: 4, name: 'WAN Backup Optical Core (Step 4)' });
+        } else {
+          waypoints.push({ ...COORDS.wanPri, step: 4, name: 'WAN Primary Optical Core (Step 4)' });
+        }
+
+        // Step 5: Data Center Border Leaf / Gateway
+        waypoints.push({ ...COORDS.dcgw, step: 5, name: 'DC Border Leaf VTEP (Step 5)' });
+
+        // Step 6: Clos Spine ECMP Selection
+        state.ecmpCounter = (state.ecmpCounter + 1) % 2;
+        if (state.spine1Outage || state.ecmpCounter === 1) {
+          waypoints.push({ ...COORDS.spine2, step: 6, name: 'Clos Spine 2 ECMP (Step 6)' });
+        } else {
+          waypoints.push({ ...COORDS.spine1, step: 6, name: 'Clos Spine 1 ECMP (Step 6)' });
+        }
+
+        // Step 7: ToR Leaf VTEP & Backend Pod
+        waypoints.push({ ...COORDS.leaf, step: 7, name: 'ToR Leaf 1 VTEP Decap (Step 7)' });
+        waypoints.push({ ...COORDS.pod, step: 7, name: 'Backend App Pod (10.200.1.10)', isDestination: true });
+
+        // For Traced Packets, append the full Return Path (HTTP 200 OK) back to Client!
+        if (isTraced) {
+          const forwardCount = waypoints.length;
+          for (let i = forwardCount - 2; i >= 0; i--) {
+            waypoints.push({
+              x: waypoints[i].x,
+              y: waypoints[i].y,
+              step: waypoints[i].step,
+              name: waypoints[i].name,
+              isReturn: true
+            });
+          }
+        }
+
+        return waypoints;
+      }
+
+      function buildDdosWaypoints() {
+        const waypoints = [
+          { ...COORDS.botnet, step: 1, name: 'Botnet Attacker' },
+          { ...COORDS.ixp, step: 1, name: 'Public Internet IXP' }
+        ];
+
+        if (state.popAOutage) {
+          waypoints.push({ ...COORDS.brB, step: 1, name: 'PoP-B Border Router' });
+          waypoints.push({ ...COORDS.scrubB, step: 2, name: 'PoP-B Flowspec Scrubber', isDropPoint: state.flowspecMitigated });
+          if (!state.flowspecMitigated) {
+            waypoints.push({ ...COORDS.l7B, step: 3, name: 'PoP-B L4/L7 Overloaded', isDropPoint: true });
+          }
+        } else {
+          waypoints.push({ ...COORDS.brA, step: 1, name: 'PoP-A Border Router' });
+          waypoints.push({ ...COORDS.scrubA, step: 2, name: 'PoP-A Flowspec Scrubber', isDropPoint: state.flowspecMitigated });
+          if (!state.flowspecMitigated) {
+            waypoints.push({ ...COORDS.l4A, step: 3, name: 'PoP-A L4LB Saturated', isDropPoint: true });
+          }
+        }
+
+        return waypoints;
+      }
+
+      function createSvgElement(tag, attrs) {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        for (const [k, v] of Object.entries(attrs)) {
+          el.setAttribute(k, v);
+        }
+        return el;
+      }
+
+      function spawnBurstEffect(x, y, color = '#ef4444', label = 'DROP') {
+        const group = createSvgElement('g', { transform: `translate(${x}, ${y})` });
+        const ring = createSvgElement('circle', {
+          r: '5',
+          fill: 'none',
+          stroke: color,
+          'stroke-width': '2.2',
+          opacity: '1'
+        });
+        group.appendChild(ring);
+
+        let textEl = null;
+        if (label) {
+          textEl = createSvgElement('text', {
+            x: '0',
+            y: '-12',
+            'text-anchor': 'middle',
+            fill: color,
+            'font-size': '9.5',
+            'font-weight': '800',
+            'font-family': 'monospace'
+          });
+          textEl.textContent = label;
+          group.appendChild(textEl);
+        }
+
+        effectsLayer.appendChild(group);
+        state.effects.push({
+          el: group,
+          ring,
+          age: 0,
+          maxAge: 0.55
+        });
+      }
+
+      function spawnPacket(type = 'legit') {
+        // Limit concurrent background packets so DOM stays ultra-responsive
+        if (type !== 'traced' && state.packets.length > 42) return;
+
+        const isTraced = type === 'traced';
+        const isDdos = type === 'ddos';
+
+        // If firing a new traced packet, remove any previous traced packet first
+        if (isTraced) {
+          state.packets = state.packets.filter((p) => {
+            if (p.type === 'traced') {
+              p.el.remove();
+              return false;
+            }
+            return true;
+          });
+          state.pausedPacket = null;
+          updatePauseBanner();
+        }
+
+        const waypoints = isDdos ? buildDdosWaypoints() : buildLegitimateWaypoints(isTraced);
+        const start = waypoints[0];
+
+        const group = createSvgElement('g', { transform: `translate(${start.x}, ${start.y})` });
+
+        if (isTraced) {
+          // Outer halo + core dot + floating label
+          const halo = createSvgElement('circle', {
+            r: '13',
+            fill: 'rgba(34, 211, 238, 0.22)',
+            stroke: '#fbbf24',
+            'stroke-width': '1.8'
+          });
+          const core = createSvgElement('circle', {
+            r: '6',
+            fill: '#22d3ee',
+            filter: 'url(#glowCyan)'
+          });
+          const badgeBg = createSvgElement('rect', {
+            x: '-48',
+            y: '-30',
+            width: '96',
+            height: '16',
+            rx: '4',
+            fill: '#0f172a',
+            stroke: '#fbbf24',
+            'stroke-width': '1.2'
+          });
+          const badgeTxt = createSvgElement('text', {
+            x: '0',
+            y: '-19',
+            'text-anchor': 'middle',
+            fill: '#fde047',
+            'font-size': '8.5',
+            'font-weight': '800',
+            'font-family': 'monospace'
+          });
+          badgeTxt.textContent = 'GET /api/v1/orders';
+
+          group.appendChild(halo);
+          group.appendChild(core);
+          group.appendChild(badgeBg);
+          group.appendChild(badgeTxt);
+          group._core = core;
+          group._halo = halo;
+          group._badgeTxt = badgeTxt;
+          group._badgeBg = badgeBg;
+        } else if (isDdos) {
+          const dot = createSvgElement('circle', {
+            r: '4.2',
+            fill: '#ef4444',
+            filter: 'url(#glowRed)'
+          });
+          group.appendChild(dot);
+        } else {
+          const dot = createSvgElement('circle', {
+            r: '4.2',
+            fill: '#22d3ee',
+            filter: 'url(#glowCyan)'
+          });
+          group.appendChild(dot);
+        }
+
+        packetsLayer.appendChild(group);
+
+        const pkt = {
+          type,
+          el: group,
+          waypoints,
+          segIdx: 0,
+          segProgress: 0,
+          speed: isTraced ? 235 : isDdos ? 340 : 275, // pixels per second
+          paused: false,
+          lastAnnouncedStep: 0
+        };
+
+        state.packets.push(pkt);
+
+        if (isTraced) {
+          selectStep(1);
+          addLog('TRACE', 'Launched traced HTTPS GET packet from Client (203.0.113.42) → Anycast VIP 198.51.100.10', 'info');
+        }
+      }
+
+      // -----------------------------------------------------------------------
+      // 9. STEP-BY-STEP PAUSE BANNER & RESUME HANDLER
+      // -----------------------------------------------------------------------
+      function updatePauseBanner() {
+        if (state.pausedPacket) {
+          const wp = state.pausedPacket.waypoints[state.pausedPacket.segIdx];
+          statusBanner.classList.remove('hidden');
+          statusBanner.className =
+            'rounded-xl border border-amber-500/50 bg-amber-950/35 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm';
+          statusBannerBadge.className = 'px-2 py-0.5 rounded font-mono text-[11px] font-bold uppercase bg-amber-500 text-slate-950';
+          statusBannerBadge.textContent = `PAUSED AT STEP ${wp.step}`;
+          statusBannerText.textContent = `Traced packet arrived at ${wp.name}. Inspect its headers below or click Next Hop.`;
+          statusBannerText.className = 'font-medium text-amber-200';
+
+          btnNextStep.disabled = false;
+          btnNextStep.className =
+            'px-3.5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs sm:text-sm font-bold flex items-center gap-1.5 transition shadow-lg shadow-amber-950/50 cursor-pointer';
+        } else {
+          statusBanner.classList.add('hidden');
+          btnNextStep.disabled = true;
+          btnNextStep.className =
+            'px-3.5 py-2 rounded-lg bg-amber-500/20 border border-amber-500/50 text-amber-300 text-xs sm:text-sm font-semibold flex items-center gap-1.5 transition opacity-40 cursor-not-allowed';
+        }
+      }
+
+      function resumePausedPacket() {
+        if (!state.pausedPacket) return;
+        state.pausedPacket.paused = false;
+        state.pausedPacket = null;
+        updatePauseBanner();
+      }
+
+      // -----------------------------------------------------------------------
+      // 10. MAIN REQUESTANIMATIONFRAME SIMULATION LOOP
+      // -----------------------------------------------------------------------
+      function animate(now) {
+        const dt = Math.min((now - state.lastFrameTime) / 1000, 0.05);
+        state.lastFrameTime = now;
+
+        // 1. Check DDoS Automated BGP Flowspec Detection Timer (1.8 seconds after flood starts)
+        if (state.ddosActive && !state.flowspecMitigated && now - state.ddosStartTime > 1800) {
+          state.flowspecMitigated = true;
+          updateTopologyVisuals();
+          addLog(
+            'FLOWSPEC',
+            'RFC 8955 BGP UPDATE injected: Match [Dst 198.51.100.10/32, Proto UDP, DstPort 53] → Action: traffic-rate 0 (TCAM Hardware Drop)',
+            'warn'
+          );
+        }
+
+        // 2. Spawn Continuous Legitimate Traffic
+        if (state.continuousTraffic && now - state.lastSpawnTime > 680) {
+          state.lastSpawnTime = now;
+          spawnPacket('legit');
+        }
+
+        // 3. Spawn Volumetric DDoS Attack Packets
+        if (state.ddosActive && now - state.lastDdosSpawnTime > 140) {
+          state.lastDdosSpawnTime = now;
+          spawnPacket('ddos');
+        }
+
+        // 4. Advance Active Packets
+        for (let i = state.packets.length - 1; i >= 0; i--) {
+          const p = state.packets[i];
+          if (p.paused) continue;
+
+          const currWp = p.waypoints[p.segIdx];
+          const nextWp = p.waypoints[p.segIdx + 1];
+
+          if (!nextWp) {
+            p.el.remove();
+            state.packets.splice(i, 1);
+            continue;
+          }
+
+          const dx = nextWp.x - currWp.x;
+          const dy = nextWp.y - currWp.y;
+          const dist = Math.hypot(dx, dy) || 1;
+
+          p.segProgress += (p.speed * dt) / dist;
+
+          if (p.segProgress >= 1) {
+            // Arrived at nextWp
+            p.segIdx += 1;
+            p.segProgress = 0;
+            p.el.setAttribute('transform', `translate(${nextWp.x}, ${nextWp.y})`);
+
+            // Handle DDoS Drop Point
+            if (p.type === 'ddos' && nextWp.isDropPoint) {
+              if (state.flowspecMitigated) {
+                state.droppedPacketsCount += 1420;
+                spawnBurstEffect(nextWp.x, nextWp.y, '#f59e0b', 'TCAM DROP');
+                if (state.droppedPacketsCount % (1420 * 12) === 0) {
+                  updateTopologyVisuals();
+                }
+              } else {
+                spawnBurstEffect(nextWp.x, nextWp.y, '#ef4444', '');
+              }
+              p.el.remove();
+              state.packets.splice(i, 1);
+              continue;
+            }
+
+            // Handle Traced Packet Milestone Arrival
+            if (p.type === 'traced') {
+              if (!nextWp.isReturn && nextWp.step && nextWp.step !== p.lastAnnouncedStep) {
+                p.lastAnnouncedStep = nextWp.step;
+                selectStep(nextWp.step);
+                addLog('TRACE', `Hop → ${nextWp.name}`, 'info');
+
+                // Pause if Step-by-Step Pause Mode is enabled
+                if (state.stepPauseMode) {
+                  p.paused = true;
+                  state.pausedPacket = p;
+                  updatePauseBanner();
+                }
+              }
+
+              // Reached Backend Compute Pod -> Switch visual style to HTTP 200 OK Return!
+              if (nextWp.isDestination) {
+                spawnBurstEffect(nextWp.x, nextWp.y, '#10b981', 'HTTP 200 OK');
+                p.el._core.setAttribute('fill', '#10b981');
+                p.el._halo.setAttribute('stroke', '#34d399');
+                p.el._badgeTxt.textContent = 'HTTP 200 OK';
+                p.el._badgeTxt.setAttribute('fill', '#6ee7b7');
+                p.el._badgeBg.setAttribute('stroke', '#10b981');
+                addLog('VXLAN', 'App Pod (10.200.1.10) processed request; returning HTTP 200 OK via reverse path', 'success');
+              }
+            }
+
+            // Completed full path
+            if (p.segIdx >= p.waypoints.length - 1) {
+              if (p.type === 'traced') {
+                spawnBurstEffect(nextWp.x, nextWp.y, '#10b981', 'RTT COMPLETE');
+                addLog('TRACE', 'Client Laptop received HTTP 200 OK response! End-to-end journey verified.', 'success');
+              }
+              p.el.remove();
+              state.packets.splice(i, 1);
+            }
+          } else {
+            // Interpolate along segment
+            const x = currWp.x + dx * p.segProgress;
+            const y = currWp.y + dy * p.segProgress;
+            p.el.setAttribute('transform', `translate(${x.toFixed(1)}, ${y.toFixed(1)})`);
+          }
+        }
+
+        // 5. Animate Burst / Drop Effects
+        for (let i = state.effects.length - 1; i >= 0; i--) {
+          const eff = state.effects[i];
+          eff.age += dt;
+          if (eff.age >= eff.maxAge) {
+            eff.el.remove();
+            state.effects.splice(i, 1);
+          } else {
+            const t = eff.age / eff.maxAge;
+            eff.ring.setAttribute('r', (6 + t * 22).toFixed(1));
+            eff.ring.setAttribute('opacity', (1 - t).toFixed(2));
+          }
+        }
+
+        requestAnimationFrame(animate);
+      }
+
+      // -----------------------------------------------------------------------
+      // 11. EVENT LISTENERS & CHAOS HANDLERS
+      // -----------------------------------------------------------------------
+      // Clickable SVG nodes
+      document.querySelectorAll('.svg-node').forEach((node) => {
+        node.addEventListener('click', () => {
+          const step = node.getAttribute('data-step');
+          if (step) selectStep(step);
+        });
+      });
+
+      // Clickable Step Tabs
+      document.querySelectorAll('.step-tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          selectStep(tab.getAttribute('data-step'));
+        });
+      });
+
+      // Header Control Buttons
+      btnFireTraced.addEventListener('click', () => {
+        spawnPacket('traced');
+      });
+
+      btnNextStep.addEventListener('click', resumePausedPacket);
+      bannerNextBtn.addEventListener('click', resumePausedPacket);
+
+      btnContinuous.addEventListener('click', () => {
+        state.continuousTraffic = !state.continuousTraffic;
+        const dot = document.getElementById('dotContinuous');
+        if (state.continuousTraffic) {
+          btnContinuous.className =
+            'px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 text-xs sm:text-sm font-medium flex items-center gap-2 transition cursor-pointer';
+          dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+          btnContinuous.querySelector('span:last-child').textContent = 'Continuous Traffic: ON';
+        } else {
+          btnContinuous.className =
+            'px-3 py-2 rounded-lg bg-[#131c31] border border-[#334155] text-slate-400 hover:text-white text-xs sm:text-sm font-medium flex items-center gap-2 transition cursor-pointer';
+          dot.className = 'w-2 h-2 rounded-full bg-slate-500';
+          btnContinuous.querySelector('span:last-child').textContent = 'Continuous Traffic: OFF';
+        }
+      });
+
+      btnStepMode.addEventListener('click', () => {
+        state.stepPauseMode = !state.stepPauseMode;
+        const dot = document.getElementById('dotStepMode');
+        if (state.stepPauseMode) {
+          btnStepMode.className =
+            'px-3 py-2 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs sm:text-sm font-medium flex items-center gap-2 transition cursor-pointer';
+          dot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-pulse';
+          btnStepMode.querySelector('span:last-child').textContent = 'Step-by-Step Pause: ON';
+          addLog('TRACE', 'Step-by-Step Pause Mode enabled. Fire a Traced Packet to inspect each hop.', 'warn');
+        } else {
+          btnStepMode.className =
+            'px-3 py-2 rounded-lg bg-[#131c31] border border-[#334155] text-slate-300 hover:border-amber-500/50 hover:text-amber-200 text-xs sm:text-sm font-medium flex items-center gap-2 transition cursor-pointer';
+          dot.className = 'w-2 h-2 rounded-full bg-slate-500';
+          btnStepMode.querySelector('span:last-child').textContent = 'Step-by-Step Pause: OFF';
+          resumePausedPacket();
+        }
+      });
+
+      // Chaos Toggle 1: DDoS Simulation
+      toggleDdos.addEventListener('change', (e) => {
+        state.ddosActive = e.target.checked;
+        state.flowspecMitigated = false;
+        if (state.ddosActive) {
+          state.ddosStartTime = performance.now();
+          state.droppedPacketsCount = 0;
+          selectStep(2);
+          addLog(
+            'ALERT',
+            'Volumetric DDoS detected! 3.4 Tbps UDP Port 53 DNS Amplification targeting Anycast VIP 198.51.100.10',
+            'danger'
+          );
+          addLog('FLOWSPEC', 'sFlow telemetry analyzing attack signature... preparing RFC 8955 TCAM filter', 'warn');
+        } else {
+          addLog('FLOWSPEC', 'DDoS flood subsided. Withdrawing temporary Flowspec drop rule; TCAM returned to baseline.', 'success');
+        }
+        updateTopologyVisuals();
+      });
+
+      // Chaos Toggle 2: Edge PoP A Outage
+      togglePopA.addEventListener('change', (e) => {
+        state.popAOutage = e.target.checked;
+        selectStep(1);
+        if (state.popAOutage) {
+          addLog('BGP', 'CRITICAL: Edge PoP A (Chicago ORD) unreachable! eBGP sessions down.', 'danger');
+          addLog('BGP', 'Anycast prefix 198.51.100.10/32 withdrawn from ORD → Global traffic failed over to Edge PoP B (New York JFK)', 'warn');
+        } else {
+          addLog('BGP', 'Edge PoP A (Chicago ORD) restored. Re-advertising Anycast VIP 198.51.100.10/32.', 'success');
+        }
+        updateTopologyVisuals();
+      });
+
+      // Chaos Toggle 3: L7 Proxy Crash (Envoy-1)
+      toggleEnvoy1.addEventListener('change', (e) => {
+        state.envoy1Crash = e.target.checked;
+        selectStep(3);
+        if (state.envoy1Crash) {
+          addLog('ENVOY', 'Health-check failed on envoy-ord-01 (Worker Panic). Removing backend from Maglev ring.', 'danger');
+          addLog('MAGLEV', 'Consistent hash table updated: 100% of PoP-A flows steered to envoy-ord-02 with zero TCP resets.', 'warn');
+        } else {
+          addLog('ENVOY', 'envoy-ord-01 restarted & passing gRPC health checks. Restored to Maglev L4LB pool.', 'success');
+        }
+        updateTopologyVisuals();
+      });
+
+      // Chaos Toggle 4: WAN Primary Fiber Cut
+      toggleWan.addEventListener('change', (e) => {
+        state.wanPrimaryCut = e.target.checked;
+        selectStep(4);
+        if (state.wanPrimaryCut) {
+          addLog('SRv6-TE', 'Loss of Light (LOS) on Primary Optical Span! Steering SID list to Backup Path fc00:dc1::2', 'danger');
+        } else {
+          addLog('SRv6-TE', 'Primary Optical Span restored. Reverting traffic engineering policy to low-latency SID fc00:dc1::1', 'success');
+        }
+        updateTopologyVisuals();
+      });
+
+      // Chaos Toggle 5: Clos Spine 1 Outage
+      toggleSpine1.addEventListener('change', (e) => {
+        state.spine1Outage = e.target.checked;
+        selectStep(6);
+        if (state.spine1Outage) {
+          addLog('BFD', 'BFD session down (3x100ms) on DC-GW ↔ Clos Spine-1! Removing Spine-1 from eBGP ECMP group.', 'danger');
+          addLog('VXLAN', '100% of VNI 100 VXLAN overlay flows re-hashed across Clos Spine-2.', 'warn');
+        } else {
+          addLog('BGP', 'Clos Spine-1 (AS 65200) eBGP unnumbered peering established. 2-way ECMP restored.', 'success');
+        }
+        updateTopologyVisuals();
+      });
+
+      // Reset All
+      btnReset.addEventListener('click', () => {
+        state.ddosActive = false;
+        state.flowspecMitigated = false;
+        state.droppedPacketsCount = 0;
+        state.popAOutage = false;
+        state.envoy1Crash = false;
+        state.wanPrimaryCut = false;
+        state.spine1Outage = false;
+
+        toggleDdos.checked = false;
+        togglePopA.checked = false;
+        toggleEnvoy1.checked = false;
+        toggleWan.checked = false;
+        toggleSpine1.checked = false;
+
+        resumePausedPacket();
+        state.packets.forEach((p) => p.el.remove());
+        state.packets = [];
+
+        updateTopologyVisuals();
+        selectStep(1);
+        addLog('BGP', 'Simulator reset: All PoPs, SRv6 WAN links, and Clos Spines nominal.', 'success');
+      });
+
+      // Clear Log
+      btnClearLog.addEventListener('click', () => {
+        nocLogContainer.innerHTML = '';
+        addLog('BGP', 'NOC event console cleared.', 'info');
+      });
+
+      // -----------------------------------------------------------------------
+      // 12. INITIALIZE DASHBOARD
+      // -----------------------------------------------------------------------
+      selectStep(1);
+      updateTopologyVisuals();
+      addLog('BGP', 'Anycast VIP 198.51.100.10/32 active at Edge PoP A (Chicago ORD) & Standby at PoP B (New York JFK).', 'info');
+      addLog('VXLAN', 'Data Center Clos fabric converged: eBGP unnumbered (RFC 5549) 2-way ECMP active across Spine-1 & Spine-2.', 'success');
+
+      // Kick off animation loop on load
+      window.addEventListener('load', () => {
+        state.lastFrameTime = performance.now();
+        spawnPacket('legit');
+        requestAnimationFrame(animate);
+      });
+    })();
+  </script>
+</body>
+</html>
