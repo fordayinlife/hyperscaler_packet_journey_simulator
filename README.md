@@ -5,7 +5,7 @@ An interactive, single-page network engineering simulator (`hyperscaler_simulato
 Built with zero external build dependencies (self-contained HTML5, SVG, Tailwind CSS, and vanilla JavaScript), the simulator lets you trace individual requests hop-by-hop, inspect on-the-wire header encapsulations, and inject real-world infrastructure failures to observe automated control-plane recovery.
 
 
-![Description of the screenshot](logrok-screenshot01.png)
+![Description of the screenshot](hyperscaler_screenshot01.png)
 
 ---
 
